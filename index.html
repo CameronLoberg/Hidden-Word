@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Memorize</title>
+<style>
+:root{--bg:#faf8f4;--fg:#222;--mut:#6b6b6b;--card:#fff;--bd:#ddd6c8;--ac:#7a4b1e;--acfg:#fff;--ok:#2d7a3e;--bad:#b3322b;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#1c1a17;--fg:#eee8dc;--mut:#a39b8c;--card:#262320;--bd:#40392f;--ac:#d9a066;--acfg:#1c1a17;--ok:#6fcf86;--bad:#ff8a80}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.5 Georgia,serif}
+main{max-width:680px;margin:0 auto;padding:20px 16px 60px}
+h1{font-size:26px;margin:0 0 4px}
+p.sub{color:var(--mut);margin:0 0 20px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:16px;margin-bottom:16px}
+input,textarea,select{width:100%;font:inherit;padding:10px;border:1px solid var(--bd);border-radius:8px;background:var(--bg);color:var(--fg)}
+textarea{min-height:160px}
+label{display:block;font-size:14px;color:var(--mut);margin:12px 0 4px}
+button{font:inherit;padding:10px 16px;border-radius:8px;border:1px solid var(--ac);background:var(--ac);color:var(--acfg);cursor:pointer;margin:12px 8px 0 0}
+button.ghost{background:transparent;color:var(--ac)}
+button.mic{font-size:20px;padding:14px 22px;width:100%;margin:8px 0 0}
+button.mic.on{background:var(--bad);border-color:var(--bad);color:#fff}
+.prompt{font-size:19px;line-height:1.7;margin:8px 0 12px}
+.meta{color:var(--mut);font-size:14px}
+.ok{color:var(--ok)}.bad{color:var(--bad);text-decoration:underline}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.row select{width:auto}
+.hidden{display:none}
+.item{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-top:1px solid var(--bd)}
+.item:first-child{border-top:0}
+.bar{height:8px;background:var(--bd);border-radius:4px;overflow:hidden;margin-top:8px}
+.bar i{display:block;height:100%;width:0;background:var(--ok);transition:width .2s}
+.chk{display:flex;gap:8px;align-items:center;margin-top:10px;font-size:15px;color:var(--mut)}
+.chk input{width:auto}
+details{margin-top:12px}
+</style>
+</head>
+<body>
+<main>
+<h1>Memorize</h1>
+<p class="sub">Paste a passage, then recite it out loud, one section at a time.</p>
+
+<div id="home">
+  <div class="card">
+    <strong>Add a text</strong>
+    <label for="title">Title</label>
+    <input id="title" placeholder="e.g. Colossians 1 (RSV)">
+    <label for="body">Paste the text (one verse or line per row; leave a blank row between paragraphs)</label>
+    <textarea id="body" placeholder="Paste here…"></textarea>
+    <label for="mode">Section size</label>
+    <select id="mode">
+      <option value="4">About 4 lines per section</option>
+      <option value="3">About 3 lines per section</option>
+      <option value="5">About 5 lines per section</option>
+      <option value="6">About 6 lines per section</option>
+      <option value="para">By paragraph (blank rows in my paste)</option>
+    </select>
+    <button id="save">Save text</button>
+  </div>
+  <div class="card"><strong>Your texts</strong><div id="list" class="meta">Nothing saved yet.</div></div>
+</div>
+
+<div id="practice" class="hidden">
+  <div class="card">
+    <div class="row">
+      <button class="ghost" id="back" style="margin:0">← Back</button>
+      <select id="level">
+        <option value="0">Level 1: every 4th word hidden</option>
+        <option value="1">Level 2: every 3rd word hidden</option>
+        <option value="2">Level 3: every 2nd word hidden</option>
+        <option value="3">Level 4: first letters only</option>
+        <option value="4">Level 5: blank recall</option>
+      </select>
+    </div>
+    <p class="meta" id="pos"></p>
+    <div class="prompt" id="prompt"></div>
+    <button class="mic" id="mic">🎤 Start speaking</button>
+    <div class="bar"><i id="barfill"></i></div>
+    <p class="meta" id="status"></p>
+    <label class="chk"><input type="checkbox" id="auto" checked> Hands-free: move on automatically when I get 90% or more, and keep listening</label>
+    <div id="result" style="margin-top:14px"></div>
+    <div class="row">
+      <button class="ghost" id="reveal">Show answer</button>
+      <button class="ghost" id="prev">← Previous</button>
+      <button class="ghost" id="next">Next →</button>
+    </div>
+    <details><summary class="meta">Prefer typing?</summary>
+      <textarea id="answer" style="min-height:90px"></textarea>
+      <button id="check">Check typed answer</button>
+    </details>
+  </div>
+</div>
+</main>
+
+<script>
+(function(){
+  var $ = function(id){ return document.getElementById(id); };
+  var texts = [], cur = null, idx = 0;
+  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  var rec = null, listening = false, base = "", session = "", silenceT = null, finished = false;
+
+  function load(){
+    try{ texts = JSON.parse(localStorage.getItem("memorize_texts")||"[]"); }catch(e){ texts=[]; }
+    texts.forEach(function(t){ if(!t.sections){ t.sections = group(t.chunks||[],4); t.pos = 0; } });
+  }
+  function store(){ try{ localStorage.setItem("memorize_texts", JSON.stringify(texts)); }catch(e){} }
+  function strip(s){ return s.trim().replace(/^\d+\s*/,""); }
+  function group(lines,n){ var o=[]; for(var i=0;i<lines.length;i+=n) o.push(lines.slice(i,i+n).join(" ")); return o; }
+  function words(s){ return s.split(/\s+/).filter(Boolean); }
+  function norm(w){ return w.toLowerCase().replace(/[^\p{L}\p{N}]/gu,""); }
+
+  function makeSections(raw, mode){
+    if(mode==="para"){
+      return raw.split(/\n\s*\n/).map(function(p){ return p.split("\n").map(strip).filter(Boolean).join(" "); }).filter(Boolean);
+    }
+    return group(raw.split("\n").map(strip).filter(Boolean), +mode);
+  }
+
+  function makePrompt(text, level){
+    var w = words(text);
+    if(level===4) return "(from memory)";
+    if(level===3) return w.map(function(x){ return x.charAt(0)+"…"; }).join(" ");
+    var n = [4,3,2][level];
+    return w.map(function(x,i){ return (i+1)%n===0 ? "_".repeat(Math.max(3,norm(x).length)) : x; }).join(" ");
+  }
+
+  // Which target words appear, in order, in what was said (tolerates misheard or skipped words)
+  function matchWords(spokenArr, target){
+    var a = spokenArr.map(norm).filter(Boolean), b = target.map(norm), n=b.length, m=a.length, i, j;
+    var dp = []; for(i=0;i<=n;i++){ dp.push(new Array(m+1).fill(0)); }
+    for(i=1;i<=n;i++) for(j=1;j<=m;j++)
+      dp[i][j] = b[i-1]===a[j-1] ? dp[i-1][j-1]+1 : Math.max(dp[i-1][j], dp[i][j-1]);
+    var hit = new Array(n).fill(false); i=n; j=m;
+    while(i>0 && j>0){
+      if(b[i-1]===a[j-1]){ hit[i-1]=true; i--; j--; }
+      else if(dp[i-1][j]>=dp[i][j-1]) i--; else j--;
+    }
+    return hit;
+  }
+
+  function renderList(){
+    var el = $("list");
+    if(!texts.length){ el.textContent = "Nothing saved yet."; return; }
+    el.innerHTML = "";
+    texts.forEach(function(t,i){
+      var d = document.createElement("div"); d.className="item";
+      var s = document.createElement("span"); s.textContent = t.title+" ("+t.sections.length+" sections)";
+      var b = document.createElement("span");
+      var go = document.createElement("button"); go.textContent="Practice"; go.style.margin="0 6px 0 0";
+      go.onclick = function(){ start(i); };
+      var del = document.createElement("button"); del.textContent="Delete"; del.className="ghost"; del.style.margin="0";
+      del.onclick = function(){ texts.splice(i,1); store(); renderList(); };
+      b.appendChild(go); b.appendChild(del); d.appendChild(s); d.appendChild(b); el.appendChild(d);
+    });
+  }
+
+  function start(i){
+    cur = texts[i]; idx = cur.pos||0; if(idx>=cur.sections.length) idx=0;
+    $("home").classList.add("hidden"); $("practice").classList.remove("hidden");
+    if(!SR) $("status").textContent = "Speech input isn’t supported in this browser. Try Chrome or Safari, or use the typing option below.";
+    show();
+  }
+  function show(){
+    stopListen();
+    var text = cur.sections[idx];
+    $("pos").textContent = cur.title+" · section "+(idx+1)+" of "+cur.sections.length;
+    $("prompt").textContent = makePrompt(text, +$("level").value);
+    $("answer").value = ""; $("result").innerHTML = "";
+    $("barfill").style.width = "0"; if(SR) $("status").textContent = "Tap the mic and recite this section.";
+    base = ""; session = ""; finished = false;
+    cur.pos = idx; store();
+  }
+
+  function showHits(hit, target){
+    var out = $("result"); out.innerHTML = "";
+    var c = 0;
+    target.forEach(function(w,i){
+      var sp = document.createElement("span");
+      if(hit[i]) c++;
+      sp.className = hit[i] ? "ok" : "bad"; sp.textContent = w+" ";
+      out.appendChild(sp);
+    });
+    var m = document.createElement("div"); m.className="meta"; m.style.marginTop="8px";
+    m.textContent = c+" of "+target.length+" words right"+(c===target.length?" — perfect!":".");
+    out.appendChild(m);
+    return c/target.length;
+  }
+
+  function update(){
+    var target = words(cur.sections[idx]);
+    var spoken = words((base+" "+session).trim());
+    var hit = matchWords(spoken, target), c = hit.filter(Boolean).length;
+    $("barfill").style.width = Math.round(100*c/target.length)+"%";
+    $("status").textContent = "🎤 Listening… "+c+" of "+target.length+" words matched";
+    clearTimeout(silenceT);
+    if(c===target.length){ finish(); }
+    else if(spoken.length>=3){ silenceT = setTimeout(finish, 4500); }
+  }
+
+  function finish(){
+    if(finished) return; finished = true;
+    clearTimeout(silenceT);
+    var target = words(cur.sections[idx]);
+    var spoken = words((base+" "+session).trim());
+    stopListen();
+    var score = showHits(matchWords(spoken, target), target);
+    $("barfill").style.width = Math.round(100*score)+"%";
+    if(score>=0.9 && $("auto").checked && idx<cur.sections.length-1){
+      $("status").textContent = "Nice! Moving to the next section…";
+      setTimeout(function(){ idx++; show(); startListen(); }, 2500);
+    } else {
+      $("status").textContent = score>=0.9 ? "Great work. Tap Next when you’re ready." : "Tap the mic to try again, or Show answer.";
+    }
+  }
+
+  function startListen(){
+    if(!SR) return;
+    finished = false; listening = true; base = ""; session = "";
+    $("mic").textContent = "⏹ Stop listening"; $("mic").classList.add("on");
+    openRec();
+  }
+  function openRec(){
+    rec = new SR(); rec.lang = "en-US"; rec.continuous = true; rec.interimResults = true;
+    rec.onresult = function(e){
+      var t = ""; for(var i=0;i<e.results.length;i++) t += e.results[i][0].transcript+" ";
+      session = t; update();
+    };
+    rec.onerror = function(e){
+      if(e.error==="not-allowed" || e.error==="service-not-allowed"){
+        listening = false;
+        $("status").textContent = "The mic is blocked here, even if your browser allows it (embedded pages often can’t use it). Open this page as its own file or site, or use your keyboard’s dictation button in the typing box below.";
+        stopListen();
+      }
+    };
+    rec.onend = function(){
+      if(listening && !finished){ base = (base+" "+session).trim(); session = ""; try{ openRec(); }catch(e){} }
+    };
+    try{ rec.start(); $("status").textContent = "🎤 Listening…"; }catch(e){}
+  }
+  function stopListen(){
+    listening = false; clearTimeout(silenceT);
+    if(rec){ try{ rec.onend=null; rec.stop(); }catch(e){} rec=null; }
+    $("mic").textContent = "🎤 Start speaking"; $("mic").classList.remove("on");
+  }
+
+  $("save").onclick = function(){
+    var title = $("title").value.trim()||"Untitled";
+    var s = makeSections($("body").value, $("mode").value);
+    if(!s.length){ alert("Paste some text first."); return; }
+    texts.push({title:title, sections:s, pos:0}); store();
+    $("title").value=""; $("body").value=""; renderList();
+  };
+  $("mic").onclick = function(){
+    if(!SR){ alert("Speech input isn’t supported here. Try Chrome or Safari."); return; }
+    if(listening){ finish(); } else { $("result").innerHTML=""; startListen(); }
+  };
+  $("check").onclick = function(){
+    var target = words(cur.sections[idx]);
+    var score = showHits(matchWords(words($("answer").value), target), target);
+    $("barfill").style.width = Math.round(100*score)+"%";
+  };
+  $("reveal").onclick = function(){ stopListen(); $("result").textContent = cur.sections[idx]; };
+  $("next").onclick = function(){ idx = (idx+1)%cur.sections.length; show(); };
+  $("prev").onclick = function(){ idx = (idx-1+cur.sections.length)%cur.sections.length; show(); };
+  $("level").onchange = show;
+  $("back").onclick = function(){ stopListen(); $("practice").classList.add("hidden"); $("home").classList.remove("hidden"); renderList(); };
+
+  load(); renderList();
+})();
+</script>
+</body>
+</html>
